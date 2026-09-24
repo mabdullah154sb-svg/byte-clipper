@@ -1,5 +1,8 @@
-yt-dlp[default]
-faster-whisper
+flask
+gunicorn
 requests
-gdown==5.2.0
-opencv-python-headless
+pyyaml
+yt-dlp
+faster-whisper
+google-genai
+ffmpeg-python
