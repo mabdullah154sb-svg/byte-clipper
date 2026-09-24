@@ -1,0 +1,69 @@
+name: Telegram Poll
+
+on:
+  schedule:
+    - cron: '*/2 * * * *'
+  workflow_dispatch:
+
+# Cron fires every 2 minutes; a slow run must never overlap another one and race
+# on .github/tg_offset.txt / .github/tg_links.json. Queue instead of cancelling,
+# so every batch of Telegram updates still gets processed.
+concurrency:
+  group: telegram-poll
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # full history so `git pull --rebase` before push never fights the shallow clone
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Telegram poll
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # GH_PAT (optional classic/fine-grained PAT) wins inside the script;
+          # GITHUB_TOKEN is the fallback and is enough for repository_dispatch
+          # because this workflow runs with `permissions: contents: write`.
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # optional comma-separated chat id allowlist; empty = public bot
+          ALLOWED_CHAT_IDS: ${{ secrets.ALLOWED_CHAT_IDS }}
+        run: python telegram_poll.py
+
+      - name: Persist offset + pending links
+        if: always()
+        run: |
+          git config user.name "byte-clipper-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          mkdir -p .github
+          touch .github/tg_offset.txt .github/tg_links.json
+
+          if [ -n "$(git status --porcelain .github/tg_offset.txt .github/tg_links.json)" ]; then
+            git add .github/tg_offset.txt .github/tg_links.json
+            git commit -m "chore: update telegram poll state [skip ci]"
+            for i in 1 2 3; do
+              if git pull --rebase origin "${GITHUB_REF_NAME}" && git push; then
+                break
+              fi
+              echo "push attempt $i failed, retrying..."
+              sleep 3
+            done
+          else
+            echo "no state changes to commit"
+          fi

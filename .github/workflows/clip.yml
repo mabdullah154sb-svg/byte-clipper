@@ -1,0 +1,82 @@
+name: Clip Video
+
+# repository_dispatch contract (sent by telegram_poll.py, event_type: byte_clip):
+#   client_payload.url       -> VIDEO_URL
+#   client_payload.num_clips -> NUM_CLIPS   (e.g. "3" or "5")
+#   client_payload.chat_id   -> CHAT_ID     (dynamic per-user delivery)
+# Manual workflow_dispatch uses inputs with the SAME names, so both paths map 1:1.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Video link (YouTube / direct mp4 / Google Drive)"
+        required: false
+      num_clips:
+        description: "Kitne shorts chahiye"
+        default: "5"
+      layout:
+        description: "auto = face detect karke crop/blur khud chune, blur = hamesha blur, crop = hamesha center/face crop"
+        type: choice
+        options: [auto, blur, crop]
+        default: auto
+      whisper_model:
+        description: "Whisper model (small best balance)"
+        type: choice
+        options: [base, small, medium]
+        default: small
+      language:
+        description: "auto ya language code (en, ur, hi ...)"
+        default: "auto"
+      chat_id:
+        description: "Telegram chat id to deliver to (blank = use TELEGRAM_CHAT_ID secret)"
+        required: false
+  repository_dispatch:
+    types: [byte_clip]
+
+jobs:
+  clip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      # Dynamic delivery: prefer the per-user chat_id from the Telegram dispatch
+      # payload, else the manual workflow_dispatch input. If both are empty,
+      # clip.py falls back to the repo-wide TELEGRAM_CHAT_ID secret below.
+      CHAT_ID: ${{ github.event.client_payload.chat_id || inputs.chat_id }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+      YT_COOKIES: ${{ secrets.YT_COOKIES }}
+      VIDEO_URL: ${{ inputs.url || github.event.client_payload.url }}
+      TG_FILE_ID: ${{ github.event.client_payload.file_id }}
+      NUM_CLIPS: ${{ inputs.num_clips || github.event.client_payload.num_clips || '5' }}
+      LAYOUT: ${{ inputs.layout || github.event.client_payload.layout || 'auto' }}
+      WHISPER_MODEL: ${{ inputs.whisper_model || github.event.client_payload.whisper_model || 'small' }}
+      LANGUAGE: ${{ inputs.language || github.event.client_payload.language || 'auto' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+
+      - name: Install python packages
+        run: pip install -r requirements.txt
+
+      - name: Run clipper
+        run: python clip.py
+
+      - name: Backup clips as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clips
+          path: output/*
+          retention-days: 3
+          if-no-files-found: ignore

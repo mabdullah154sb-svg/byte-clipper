@@ -1,0 +1,5 @@
+yt-dlp[default]
+faster-whisper
+requests
+gdown==5.2.0
+opencv-python-headless
